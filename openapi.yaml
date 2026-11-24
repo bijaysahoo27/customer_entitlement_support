@@ -1,0 +1,726 @@
+openapi: 3.1.0
+info:
+  title: Customer Entitlement & Support Case API
+  version: 1.0.0
+  description: |
+    Customer entitlement, usage, and support case API for internal applications and agents.
+    A response's X-Correlation-ID identifies the request in problem responses.
+    Clients may supply a correlation ID of up to 80 letters, digits, periods, underscores, or hyphens.
+
+servers:
+  - url: http://127.0.0.1:8000
+    description: Local mock API
+paths:
+  /v1/customers/{id}:
+    get:
+      operationId: getCustomerOverview
+      summary: Get a customer's entitlement and usage summary
+      description: Returns entitlement, latest usage, and case summaries. ARR fields require finance:arr:read.
+      tags: [Customers]
+      security:
+        - oauth2: [customers:read, cases:read]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Customer account identifier. The local mock also accepts ACC-77 as an alias for ACC-007.
+          schema:
+            type: string
+          example: ACC-007
+      responses:
+        '200':
+          description: Customer overview. Usage is null when no usage data exists.
+          headers:
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+            Deprecation:
+              $ref: '#/components/headers/Deprecation'
+            Sunset:
+              $ref: '#/components/headers/Sunset'
+            Link:
+              $ref: '#/components/headers/Link'
+            Cache-Control:
+              $ref: '#/components/headers/PrivateNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerOverview'
+              example:
+                account:
+                  customer_id: ACC-007
+                  name: Acme Corp
+                  contract_id: null
+                  support_tier: Platinum
+                  renewal_date: '2027-01-15'
+                usage:
+                  customer_id: ACC-007
+                  month: '2026-09'
+                  protected_tb: 412.5
+                  api_calls: 1203331
+                  active_users: 87
+                cases:
+                  - case_id: CS-10231
+                    customer_id: ACC-007
+                    subject: Backup failing on node 3
+                    status: open
+                    priority: P1
+                    opened_at: '2026-10-24T08:12:00+00:00'
+                    escalated_at: null
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+  /v1/cases:
+    get:
+      operationId: findCases
+      summary: Search support cases
+      description: |
+        Filters are combined with AND. Use the same filter, sort, and limit
+        values on subsequent requests and pass the previous next_cursor unchanged.
+        A null next_cursor means there are no more results.
+      tags: [Cases]
+      security:
+        - oauth2: [cases:read]
+      parameters:
+        - name: customer_id
+          in: query
+          description: Customer account identifier. The mock accepts ACC-77 as an alias for ACC-007.
+          schema:
+            type: string
+          example: ACC-007
+        - name: support_tier
+          in: query
+          schema:
+            type: string
+            enum: [Platinum, Gold, Silver, Standard]
+          example: Platinum
+        - name: priority
+          in: query
+          schema:
+            type: string
+            enum: [P1, P2, P3, P4]
+          example: P1
+        - name: open_only
+          in: query
+          description: When true, include only open and in-progress cases.
+          schema:
+            type: boolean
+            default: false
+          example: true
+        - name: older_than_hours
+          in: query
+          description: Include cases opened strictly more than this many hours ago.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 87600
+          example: 48
+        - name: renewal_within_days
+          in: query
+          description: Include renewals from today through this many days from today, inclusive, in UTC.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 3650
+          example: 90
+        - name: sort
+          in: query
+          description: |
+            A leading minus sign means descending. Priority ascending puts P1
+            first. Equal sort values are ordered by case_id ascending.
+          schema:
+            type: string
+            enum: [opened_at, '-opened_at', priority, '-priority', renewal_date, '-renewal_date']
+            default: opened_at
+        - name: limit
+          in: query
+          description: Maximum number of cases to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          description: Opaque next_cursor from the previous page. Omit for the first page.
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: A page of matching cases. An empty search returns an empty items array and a null next_cursor.
+          headers:
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+            Deprecation:
+              $ref: '#/components/headers/Deprecation'
+            Sunset:
+              $ref: '#/components/headers/Sunset'
+            Link:
+              $ref: '#/components/headers/Link'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasePage'
+              example:
+                items:
+                  - case_id: CS-10231
+                    customer_id: ACC-007
+                    customer_name: Acme Corp
+                    support_tier: Platinum
+                    renewal_date: '2027-01-15'
+                    subject: Backup failing on node 3
+                    status: open
+                    priority: P1
+                    opened_at: '2026-10-24T08:12:00+00:00'
+                    escalated_at: null
+                    comments_etag: '"sample-case-version"'
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/InvalidInput'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+  /v1/cases/{id}/comments:
+    post:
+      operationId: addCaseComment
+      summary: Add a comment to an open case
+      description: |
+        Supply a UUID in request_id. A retry by the same authenticated principal with the
+        same case ID, request ID, and message returns the original 201
+        response without creating another comment. Leading and trailing
+        whitespace is removed before comparing messages.
+      tags: [Cases]
+      security:
+        - oauth2: [cases:comment]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: CS-10231
+        - name: If-Match
+          in: header
+          description: Optional strong case ETag. A stale tag fails for new comments.
+          schema:
+            type: string
+            pattern: ^"[^"]*"$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaseActionRequest'
+            example:
+              request_id: '641404b1-6850-4ab8-bd9a-bab255766cb0'
+              message: Confirmed the incident with the customer.
+      responses:
+        '201':
+          description: Comment created, or the original comment returned on retry.
+          headers:
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+            Deprecation:
+              $ref: '#/components/headers/Deprecation'
+            Sunset:
+              $ref: '#/components/headers/Sunset'
+            Link:
+              $ref: '#/components/headers/Link'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseComment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/InvalidInput'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+  
+webhooks:
+  case.escalated:
+    post:
+      operationId: receiveCaseEscalated
+      summary: Receive a case escalation event
+      description: |
+        Previously queued case escalation events can still be delivered.
+        Delivery retries reuse event_id and are signed with the timestamp
+        of the current delivery attempt.
+
+        Before parsing JSON, verify that X-Webhook-Timestamp is within
+        300 seconds of the receiver's current time. Compute HMAC-SHA256
+        using the shared webhook secret over the timestamp header value
+        encoded as ASCII, one ASCII period, and the raw request body bytes,
+        in that order. Compare the expected and received signatures in
+        constant time. Reject missing, malformed, stale, or invalid signatures.
+
+        After verification, process each event_id once. Acknowledge
+        duplicate deliveries with 204.
+      parameters:
+        - name: X-Webhook-Timestamp
+          in: header
+          required: true
+          description: Delivery time in Unix seconds, encoded as decimal digits.
+          schema:
+            type: string
+            pattern: '^[0-9]+$'
+        - name: X-Webhook-Signature
+          in: header
+          required: true
+          description: The sha256= prefix followed by the lowercase hex HMAC digest.
+          schema:
+            type: string
+            pattern: '^sha256=[0-9a-f]{64}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaseEscalatedEvent'
+      responses:
+        '204':
+          description: Event accepted or already processed.
+        '400':
+          description: The authenticated event payload is invalid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: Signature or timestamp verification failed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://identity.example.com/oauth2/authorize
+          tokenUrl: https://identity.example.com/oauth2/token
+          scopes:
+            customers:read: Read authorized customer entitlements and usage.
+            cases:read: Read cases for authorized accounts.
+            cases:comment: Add comments to authorized cases.
+            finance:arr:read: Read ARR and currency for authorized accounts.
+        clientCredentials:
+          tokenUrl: https://identity.example.com/oauth2/token
+          scopes:
+            customers:read: Read authorized customer entitlements and usage.
+            cases:read: Read cases for authorized accounts.
+            cases:comment: Add comments to authorized cases.
+            finance:arr:read: Read ARR and currency for authorized accounts.
+  headers:
+    Deprecation:
+      description: On deprecated operations, the announcement's effective time as an HTTP structured-field date.
+      schema:
+        type: string
+    Sunset:
+      description: On retiring operations with an announced retirement date, the date as an HTTP-date.
+      schema:
+        type: string
+    Link:
+      description: Migration guidance URL with rel="deprecation" on retiring operations.
+      schema:
+        type: string
+    PrivateNoStore:
+      description: Prevents caching of account data and scope-dependent fields.
+      schema:
+        type: string
+        const: private, no-store
+    RateLimitLimit:
+      description: Maximum requests per quota window.
+      schema:
+        type: integer
+        minimum: 1
+    RateLimitRemaining:
+      description: Requests left in the current quota window.
+      schema:
+        type: integer
+        minimum: 0
+    RateLimitReset:
+      description: Seconds until the quota resets.
+      schema:
+        type: integer
+        minimum: 0
+    RetryAfter:
+      description: Minimum seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 1
+    Authenticate:
+      description: Bearer challenge. Insufficient scope may include error and scope parameters.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Malformed request or invalid cursor.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Missing, invalid, or expired access token.
+      headers:
+        WWW-Authenticate:
+          $ref: '#/components/headers/Authenticate'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Forbidden:
+      description: The authenticated caller lacks a required scope.
+      headers:
+        WWW-Authenticate:
+          $ref: '#/components/headers/Authenticate'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: The resource does not exist or is outside the caller's account grants.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: Case state or idempotency key conflicts with the requested action.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionFailed:
+      description: If-Match does not match the current case version.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InvalidInput:
+      description: One or more request fields failed validation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ValidationProblem'
+    RateLimited:
+      description: The caller's quota is exhausted.
+      headers:
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    BadGateway:
+      description: An upstream system returned an unusable response.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unavailable:
+      description: A required upstream dependency is temporarily unavailable.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    GatewayTimeout:
+      description: A required upstream dependency did not respond in time.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    CustomerOverview:
+      type: object
+      required: [account, usage, cases]
+      properties:
+        account:
+          $ref: '#/components/schemas/Entitlement'
+        usage:
+          anyOf:
+            - $ref: '#/components/schemas/MonthlyUsage'
+            - $ref: '#/components/schemas/WindowedUsage'
+            - type: 'null'
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/CaseSummary'
+    Entitlement:
+      type: object
+      required: [customer_id, name, contract_id, support_tier, renewal_date]
+      properties:
+        customer_id:
+          type: string
+        name:
+          type: string
+        contract_id:
+          type: [string, 'null']
+        support_tier:
+          type: string
+          enum: [Platinum, Gold, Silver, Standard]
+        renewal_date:
+          type: string
+          format: date
+        arr:
+          type: integer
+          description: Annual recurring revenue in whole units of arr_currency. Omitted without finance:arr:read.
+        arr_currency:
+          type: string
+          description: Omitted without finance:arr:read.
+          example: USD
+    MonthlyUsage:
+      type: object
+      required: [customer_id, month, protected_tb, api_calls, active_users]
+      properties:
+        customer_id:
+          type: string
+        month:
+          type: string
+          pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+        protected_tb:
+          type: number
+          description: Protected storage in terabytes.
+        api_calls:
+          type: integer
+        active_users:
+          type: integer
+    WindowedUsage:
+      type: object
+      description: Usage summary returned for earlier mock datasets.
+      required: [customer_id, window_days, api_calls, active_users]
+      properties:
+        customer_id:
+          type: string
+        window_days:
+          type: integer
+        api_calls:
+          type: integer
+        active_users:
+          type: integer
+    CaseSummary:
+      type: object
+      required: [case_id, customer_id, subject, status, priority, opened_at, escalated_at]
+      properties:
+        case_id:
+          type: string
+        customer_id:
+          type: string
+        subject:
+          type: string
+        status:
+          type: string
+          enum: [open, in_progress, closed]
+        priority:
+          type: string
+          enum: [P1, P2, P3, P4]
+        opened_at:
+          type: string
+          format: date-time
+        escalated_at:
+          type: [string, 'null']
+          format: date-time
+    CaseMatch:
+      allOf:
+        - $ref: '#/components/schemas/CaseSummary'
+        - type: object
+          required: [customer_name, support_tier, renewal_date, comments_etag]
+          properties:
+            comments_etag:
+              type: string
+              description: Strong case version that clients may send with a comment.
+            customer_name:
+              type: string
+            support_tier:
+              type: string
+              enum: [Platinum, Gold, Silver, Standard]
+            renewal_date:
+              type: string
+              format: date
+    CasePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CaseMatch'
+        next_cursor:
+          type: [string, 'null']
+          description: Cursor for the next page, or null on the last page.
+    CaseActionRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, message]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+          description: Client-generated idempotency key scoped to the authenticated principal and case.
+        message:
+          type: string
+          description: Comment text. Must contain 1 to 2,000 characters after trimming whitespace.
+    CaseComment:
+      type: object
+      required: [case_id, request_id, kind, actor, message, created_at]
+      properties:
+        case_id:
+          type: string
+        request_id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          const: comment
+        actor:
+          type: string
+          enum: [application, copilot]
+        message:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    CaseEscalation:
+      type: object
+      required: [case_id, request_id, kind, actor, message, created_at]
+      properties:
+        case_id:
+          type: string
+        request_id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          const: escalation
+        actor:
+          type: string
+          enum: [application, copilot]
+        message:
+          type: string
+          description: Recorded escalation reason.
+        created_at:
+          type: string
+          format: date-time
+    CaseEscalatedEvent:
+      type: object
+      required: [event_id, type, occurred_at, data]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+          description: Stable event identifier used to deduplicate deliveries.
+        type:
+          type: string
+          const: case.escalated
+        occurred_at:
+          type: string
+          format: date-time
+          description: Time the escalation was recorded.
+        data:
+          $ref: '#/components/schemas/CaseEscalation'
+    Problem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - request_id
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          description: Stable identifier for this problem type.
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        request_id:
+          type: string
+          description: Server correlation ID for this occurrence.
+    ValidationProblem:
+      allOf:
+      - $ref: '#/components/schemas/Problem'
+      - type: object
+        required:
+        - errors
+        properties:
+          errors:
+            type: array
+            minItems: 1
+            items:
+              type: object
+              required:
+              - field
+              - code
+              - message
+              properties:
+                field:
+                  type: string
+                  description: Query, path, or header name, or JSON Pointer into the body.
+                code:
+                  type: string
+                message:
+                  type: string

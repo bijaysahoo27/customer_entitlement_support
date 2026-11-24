@@ -1,0 +1,13 @@
+[
+  {
+    "id": "CS-10231",
+    "accountId": "ACC-007",
+    "priority": "P1",
+    "Status": "open",
+    "openedAt": "2026-10-24T08:12:00Z",
+    "subject": "Backup failing on node 3",
+    "Comments": [
+      {"author": "jdoe", "body": "Investigating", "at": "2026-10-24T09:00:00Z"}
+    ]
+  }
+]

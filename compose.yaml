@@ -1,0 +1,26 @@
+services:
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=2).close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+    environment:
+      SUPPORT_DATABASE: /data/support.sqlite3
+      SUPPORT_LOCAL_TOKEN_FILE: ${SUPPORT_LOCAL_TOKEN_FILE-/data/local-token}
+      SUPPORT_OAUTH_ISSUER: ${SUPPORT_OAUTH_ISSUER:-}
+      SUPPORT_OAUTH_AUDIENCE: ${SUPPORT_OAUTH_AUDIENCE:-}
+      SUPPORT_OAUTH_JWKS_URL: ${SUPPORT_OAUTH_JWKS_URL:-}
+      SUPPORT_COPILOT_CLIENT_ID: ${SUPPORT_COPILOT_CLIENT_ID:-}
+      SUPPORT_RATE_LIMIT: ${SUPPORT_RATE_LIMIT:-120}
+      SUPPORT_CURSOR_SECRET: ${SUPPORT_CURSOR_SECRET:-}
+      SUPPORT_WEBHOOK_URL: ${SUPPORT_WEBHOOK_URL:-}
+      SUPPORT_WEBHOOK_SECRET: ${SUPPORT_WEBHOOK_SECRET:-}
+    volumes:
+      - support-data:/data
+volumes:
+  support-data:

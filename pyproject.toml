@@ -1,0 +1,22 @@
+[project]
+name = "customer-entitlement-support"
+version = "0.1.0"
+description = "Customer entitlements, usage, and support case API"
+readme = "README.md"
+authors = [
+    { name = "Bijay sahoo", email = "bijaysahoo27@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.165.0",
+    "httpx",
+    "pyjwt[crypto]",
+    "uvicorn",
+]
+
+[project.scripts]
+customer-entitlement-support = "customer_entitlement_support:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
