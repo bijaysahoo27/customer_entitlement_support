@@ -10,6 +10,7 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.165.0",
     "httpx",
+    "mcp>=1.26,<2",
     "psycopg[binary]==3.2.13",
     "pyjwt[crypto]",
     "pyyaml==6.0.3",

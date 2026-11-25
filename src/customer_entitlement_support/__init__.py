@@ -140,9 +140,12 @@ def consumer(credentials: Annotated[HTTPAuthorizationCredentials | None, Securit
     token = credentials.credentials if credentials else None
     local_token = request.app.state.local_token
     if local_token and token and compare_digest(token.encode(), local_token.encode()):
-        principal = Principal("local-fixture", frozenset({
+        scopes = {
             "customers:read", "cases:read", "cases:comment",
-        }), frozenset({"ACC-007"}), "application")
+        }
+        if os.getenv("SUPPORT_LOCAL_ESCALATION") == "1":
+            scopes.add("cases:escalate")
+        principal = Principal("local-fixture", frozenset(scopes), frozenset({"ACC-007"}), "application")
     else:
         if local_token and not os.getenv("SUPPORT_OAUTH_ISSUER"):
             token = None
@@ -177,13 +180,20 @@ class Case(BaseModel):
     escalated_at: str | None
 
 
-class CaseComment(BaseModel):
+class CaseAction(BaseModel):
     case_id: str
     request_id: UUID
-    kind: Literal["comment"]
     actor: str
     message: str
     created_at: str
+
+
+class CaseComment(CaseAction):
+    kind: Literal["comment"]
+
+
+class CaseEscalation(CaseAction):
+    kind: Literal["escalation"]
 
 
 class MonthlyUsage(BaseModel):
@@ -366,8 +376,8 @@ def case_etag(db: Connection, case) -> str:
     return '"' + sha256(encoded).hexdigest() + '"'
 
 
-def record_comment(db: Connection, case_id: str, payload: ActionRequest,
-                   actor: Principal, if_match: str | None) -> dict:
+def record_action(db: Connection, case_id: str, payload: ActionRequest, actor: Principal,
+                  if_match: str | None, kind: Literal["comment", "escalation"]) -> dict:
     request_id = str(payload.request_id)
     with db.transaction():
         case = require_case(db, case_id, actor)
@@ -378,7 +388,7 @@ def record_comment(db: Connection, case_id: str, payload: ActionRequest,
             FROM action_requests WHERE case_id = %s AND principal = %s AND request_id = %s
         """, (case_id, actor.identifier, request_id)).fetchone()
         if previous:
-            if (previous["kind"], previous["message"]) != ("comment", payload.message):
+            if (previous["kind"], previous["message"]) != (kind, payload.message):
                 raise HTTPException(409, "Request ID already used for a different action")
             return dict(previous)
         if db.execute("SELECT 1 FROM case_actions WHERE case_id = %s AND request_id = %s",
@@ -388,8 +398,10 @@ def record_comment(db: Connection, case_id: str, payload: ActionRequest,
             raise HTTPException(412, "If-Match does not match the current case version")
         if case["status"] == "closed":
             raise HTTPException(409, "Case is closed")
+        if kind == "escalation" and case["escalated_at"] is not None:
+            raise HTTPException(409, "Case is already escalated")
         now = datetime.now(timezone.utc).isoformat()
-        action = {"case_id": case_id, "request_id": request_id, "kind": "comment", "actor": actor.actor,
+        action = {"case_id": case_id, "request_id": request_id, "kind": kind, "actor": actor.actor,
                   "message": payload.message, "created_at": now}
         db.execute("""
             INSERT INTO action_requests (case_id, principal, request_id, kind, actor, message, created_at)
@@ -400,6 +412,13 @@ def record_comment(db: Connection, case_id: str, payload: ActionRequest,
             INSERT INTO audit_log (principal, case_id, action, outcome, request_id, created_at)
             VALUES (%s, %s, %s, 'committed', %s, %s)
         """, (actor.identifier, case_id, action["kind"], request_id, now))
+        if kind == "escalation":
+            db.execute("UPDATE cases SET escalated_at = %s WHERE case_id = %s", (now, case_id))
+            event_id = str(uuid4())
+            event = {"event_id": event_id, "type": "case.escalated", "occurred_at": now, "data": action}
+            db.execute("""
+                INSERT INTO webhook_outbox (event_id, payload, next_attempt) VALUES (%s, %s, 0)
+            """, (event_id, json.dumps(event).encode("utf-8")))
         return action
 
 
@@ -410,7 +429,16 @@ def add_comment(id: str, payload: ActionRequest, db: Database, actor: Consumer,
     """Append a comment to an open case. Reuse request_id when retrying."""
     actor.require("cases:comment")
     tag = ",".join(if_match) if if_match else None
-    return record_comment(db, id, payload, actor, tag)
+    return record_action(db, id, payload, actor, tag, "comment")
+
+
+@app.post("/v1/cases/{id}/escalations", status_code=status.HTTP_201_CREATED,
+          operation_id="escalateCase")
+def escalate_case(id: str, payload: ActionRequest, db: Database, actor: Consumer,
+                  if_match: Annotated[list[str], Header()]) -> CaseEscalation:
+    """Escalate an open case using its current version and queue a webhook event."""
+    actor.require("cases:escalate")
+    return record_action(db, id, payload, actor, ",".join(if_match), "escalation")
 
 
 def main() -> None:

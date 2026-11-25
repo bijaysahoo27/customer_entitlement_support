@@ -103,25 +103,3 @@ Send `Authorization: Bearer <access-token>` with requests. Import the OpenAPI co
 curl -fsS -H "Authorization: Bearer $ACCESS_TOKEN" \
   http://127.0.0.1:8000/v1/customers/ACC-007
 ```
-
-## Support Copilot
-
-Set `ACCESS_TOKEN` to an OAuth access token with the scopes needed by the Copilot. Map the OpenAPI operation IDs to typed agent tools. For “Which Platinum customers have P1 cases open for more than 48 hours and a renewal in the next 90 days?”, call `findCases` with these filters.
-
-```bash
-curl -fsS -H "Authorization: Bearer $ACCESS_TOKEN" \
-  'http://127.0.0.1:8000/v1/cases?support_tier=Platinum&priority=P1&open_only=true&older_than_hours=48&renewal_within_days=90'
-```
-
-Use `addCaseComment` with an explicit case ID, a UUID `request_id`, and a `message` containing the comment. Reuse the same request ID and payload for workflow retries. Each action records the consumer type, and closed cases reject mutations with HTTP 409.
-
-To make a comment conditional on the version you reviewed, copy the case's `comments_etag` from `GET /v1/cases`, including its quotes. A stale tag returns `412`.
-
-```bash
-curl -fsS -X POST \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H 'If-Match: "paste-comments-etag-here"' \
-  -H 'Content-Type: application/json' \
-  -d '{"request_id":"641404b1-6850-4ab8-bd9a-bab255766cb0","message":"Confirmed the incident with the customer."}' \
-  http://127.0.0.1:8000/v1/cases/CS-10231/comments
-```

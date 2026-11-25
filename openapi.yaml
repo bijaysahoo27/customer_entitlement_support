@@ -303,13 +303,67 @@ paths:
         '504':
           $ref: '#/components/responses/GatewayTimeout'
   
+  /v1/cases/{id}/escalations:
+    post:
+      operationId: escalateCase
+      summary: Escalate an open case and queue an escalation event
+      description: Requires the current case ETag for a new escalation. A matching retry returns the original response.
+      tags: [Cases]
+      security:
+        - oauth2: [cases:escalate]
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: If-Match
+          in: header
+          required: true
+          description: Strong ETag from the latest case search.
+          schema:
+            type: string
+            pattern: ^"[^"]*"$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaseActionRequest'
+      responses:
+        '201':
+          description: Escalation created, or the original escalation returned on retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaseEscalation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/InvalidInput'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
 webhooks:
   case.escalated:
     post:
       operationId: receiveCaseEscalated
       summary: Receive a case escalation event
       description: |
-        Previously queued case escalation events can still be delivered.
+        An escalation queues a case escalation event for delivery.
         Delivery retries reuse event_id and are signed with the timestamp
         of the current delivery attempt.
 
@@ -374,6 +428,7 @@ components:
             customers:read: Read authorized customer entitlements and usage.
             cases:read: Read cases for authorized accounts.
             cases:comment: Add comments to authorized cases.
+            cases:escalate: Escalate authorized cases.
             finance:arr:read: Read ARR and currency for authorized accounts.
         clientCredentials:
           tokenUrl: https://identity.example.com/oauth2/token
@@ -381,6 +436,7 @@ components:
             customers:read: Read authorized customer entitlements and usage.
             cases:read: Read cases for authorized accounts.
             cases:comment: Add comments to authorized cases.
+            cases:escalate: Escalate authorized cases.
             finance:arr:read: Read ARR and currency for authorized accounts.
   headers:
     Deprecation:
