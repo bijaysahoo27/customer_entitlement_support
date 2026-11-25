@@ -2,6 +2,19 @@
 
 Internal Support, Finance, and Customer Success tools can retrieve customer entitlements, support cases, and product usage through one API. A Support Copilot can use the same OpenAPI contract to search cases and add comments.
 
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Runtime and REST API | Python 3.13, FastAPI, Uvicorn, and Pydantic |
+| Database | PostgreSQL 17 with Psycopg 3 |
+| API contract and documentation | OpenAPI 3.1, PyYAML, and Swagger UI |
+| Agent integration | Python MCP SDK over stdio, with Claude Desktop as the host |
+| HTTP client | HTTPX for MCP-to-API requests and webhook delivery |
+| Authentication | OAuth 2.0 bearer tokens and RS256 JWT validation with PyJWT, plus a local fixture token |
+| Local development | Docker Compose, Make, and WSL |
+| Python packaging | uv and Hatchling |
+
 ## Run locally
 
 In a WSL terminal with Git, Docker Compose, and Make available, replace `<repository-url>` with the project’s Git clone URL, then run:
