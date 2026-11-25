@@ -4,6 +4,7 @@ WORKDIR /app
 COPY requirement.txt ./
 RUN pip install --no-cache-dir -r requirement.txt
 COPY src ./src
+COPY openapi.yaml ./
 RUN mkdir /data && chown 10001:10001 /data
 USER 10001:10001
 ENTRYPOINT ["python", "-m", "uvicorn", "--host", "0.0.0.0"]

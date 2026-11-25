@@ -1,6 +1,7 @@
 *
 !Dockerfile
 !requirement.txt
+!openapi.yaml
 !src/
 !src/**
 **/__pycache__

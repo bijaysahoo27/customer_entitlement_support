@@ -1,6 +1,9 @@
 services:
   api:
     build: .
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -10,7 +13,7 @@ services:
       retries: 15
       start_period: 5s
     environment:
-      SUPPORT_DATABASE: /data/support.sqlite3
+      SUPPORT_DATABASE_URL: ${SUPPORT_DATABASE_URL:-postgresql://support:support-local@db:5432/support}
       SUPPORT_LOCAL_TOKEN_FILE: ${SUPPORT_LOCAL_TOKEN_FILE-/data/local-token}
       SUPPORT_OAUTH_ISSUER: ${SUPPORT_OAUTH_ISSUER:-}
       SUPPORT_OAUTH_AUDIENCE: ${SUPPORT_OAUTH_AUDIENCE:-}
@@ -22,5 +25,21 @@ services:
       SUPPORT_WEBHOOK_SECRET: ${SUPPORT_WEBHOOK_SECRET:-}
     volumes:
       - support-data:/data
+  db:
+    image: postgres:17
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_DB: support
+      POSTGRES_USER: support
+      POSTGRES_PASSWORD: support-local
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "support", "-d", "support"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
 volumes:
   support-data:
+  postgres-data:

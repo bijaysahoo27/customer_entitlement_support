@@ -11,6 +11,19 @@ servers:
   - url: http://127.0.0.1:8000
     description: Local mock API
 paths:
+  /health:
+    get:
+      summary: Check API health
+      responses:
+        '200':
+          description: API is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
   /v1/customers/{id}:
     get:
       operationId: getCustomerOverview
@@ -19,6 +32,7 @@ paths:
       tags: [Customers]
       security:
         - oauth2: [customers:read, cases:read]
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -95,6 +109,7 @@ paths:
       tags: [Cases]
       security:
         - oauth2: [cases:read]
+        - bearerAuth: []
       parameters:
         - name: customer_id
           in: query
@@ -222,6 +237,7 @@ paths:
       tags: [Cases]
       security:
         - oauth2: [cases:comment]
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -344,6 +360,10 @@ webhooks:
                 $ref: '#/components/schemas/Problem'
 components:
   securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Paste an access token or the local fixture token. The operation's required scopes still apply to OAuth access tokens.
     oauth2:
       type: oauth2
       flows:

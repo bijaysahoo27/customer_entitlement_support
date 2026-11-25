@@ -17,7 +17,7 @@ make up
 - [API docs](http://127.0.0.1:8000/docs)
 - [Health check](http://127.0.0.1:8000/health)
 
-To start with Docker Compose directly, run `docker compose up --build --wait --wait-timeout 60`. Use `docker compose logs -f api` to follow the logs. Run `make down` to stop the API. The SQLite database persists in the `support-data` Docker volume.
+To start with Docker Compose directly, run `docker compose up --build --wait --wait-timeout 60`. Use `docker compose logs -f api` to follow the logs. Run `make down` to stop the services. PostgreSQL data persists in the `postgres-data` volume. The local token stays in the `support-data` volume.
 
 Compose generates a local bearer token on first boot. Retrieve it once startup completes and use it for the request examples or Swagger UI.
 
@@ -38,7 +38,7 @@ export SUPPORT_LOCAL_TOKEN_FILE=''
 make up
 ```
 
-Import [openapi.yaml](openapi.yaml) as the platform contract. FastAPI also exposes its generated route documentation at <http://127.0.0.1:8000/docs>. Use **Authorize** to paste an OAuth access token.
+FastAPI serves the [checked-in API contract](openapi.yaml) at `/openapi.json`, and Swagger UI displays it at <http://127.0.0.1:8000/docs>. Use **Authorize** and select **bearerAuth** to paste an access token. Restart the app after editing the contract, or rebuild and restart with `make up` when using Docker Compose.
 
 Access tokens must be RS256-signed JWTs with `iss`, `aud`, `sub`, and `exp` claims. Configure the identity provider to include a space-separated `scope` string and an `account_ids` array of permitted customer IDs. Use interactive authorization code with PKCE and OIDC sign-in, or client credentials for service integrations. Set `SUPPORT_COPILOT_CLIENT_ID` to identify the Copilot client via its token's `client_id` or `azp` claim.
 
@@ -52,15 +52,15 @@ To enable webhook delivery, configure `SUPPORT_WEBHOOK_URL` as an HTTPS receiver
 | --- | --- | --- |
 | Case system | `cases.json` | Case IDs, account IDs, priorities, status, opening timestamps, and comments |
 | Entitlement system | `accounts.csv` and `entitlements.xml` | Account names, USD ARR, support tier, and renewal date. The XML feed supplies the latest tier and renewal. |
-| Usage warehouse | `usage.sql` loaded into SQLite | Monthly protected TB, API calls, and active users |
+| Usage warehouse | `usage.sql` loaded into PostgreSQL | Monthly protected TB, API calls, and active users |
 
-At startup, FastAPI calls `initialize()` in `store.py`. It creates and seeds `/data/support.sqlite3` inside the container on first use. Later starts reuse the database in the `support-data` volume, so fixture edits only take effect when a fresh database is seeded.
+At startup, FastAPI connects to `SUPPORT_DATABASE_URL` and calls `initialize()` in `store.py` to create and seed the PostgreSQL tables. Compose provides a local database with development credentials by default. For a standalone API process, set `SUPPORT_DATABASE_URL` to its PostgreSQL connection URL. Fixture edits take effect when a fresh database is seeded. Existing SQLite data requires a separate import.
 
-The appendix uses `ACC-77` in the CSV and `ACC-007` in the other sources. The mock maps `ACC-77` to `ACC-007`, which is the ID returned by the API. Both IDs work for customer lookup and case filtering. The sample provides a contract end date, so `contract_id` is null. SQLite stores imported comments with their original author and timestamp.
+The appendix uses `ACC-77` in the CSV and `ACC-007` in the other sources. The mock maps `ACC-77` to `ACC-007`, which is the ID returned by the API. Both IDs work for customer lookup and case filtering. The sample provides a contract end date, so `contract_id` is null. PostgreSQL stores imported comments with their original author and timestamp.
 
 ## Data model
 
-SQLite fits the local fixture dataset and stores comments, their idempotency keys, and audit entries in one transaction. The write transaction serializes changes before evaluating an ETag or deciding whether a request is a replay. A replay returns the persisted action result. Incoming user actions live in `action_requests` and imported comments live in `case_actions`.
+PostgreSQL stores comments, their idempotency keys, and audit entries in one transaction. The write transaction locks the case row before evaluating an ETag or deciding whether a request is a replay. A replay returns the persisted action result. Incoming user actions live in `action_requests` and imported comments live in `case_actions`.
 
 | Tables | Keys and indexes |
 | --- | --- |
@@ -70,21 +70,21 @@ SQLite fits the local fixture dataset and stores comments, their idempotency key
 | `audit_log`, `api_quota` | Audit uses a sequence primary key and a `(case_id, sequence)` index for per-case review. Quota uses one row per principal. |
 | `webhook_outbox` | `event_id` identifies a delivery across retries. A partial index on `next_attempt` covers only undelivered rows. |
 
-### Inspect SQLite
+### Inspect PostgreSQL
 
-While the API is running, use the container’s Python SQLite module to list tables and inspect account rows. Run this from the project directory in WSL.
+While Compose is running, open PostgreSQL from the project directory in WSL.
 
 ```bash
-docker compose exec -T api python - <<'PY'
-import sqlite3
-from contextlib import closing
+docker compose exec db psql -U support -d support
+```
 
-with closing(sqlite3.connect("file:/data/support.sqlite3?mode=ro", uri=True)) as db:
-    tables = db.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-    print("Tables:", ", ".join(name for (name,) in tables))
-    for row in db.execute("SELECT customer_id, name, support_tier FROM accounts ORDER BY customer_id"):
-        print(*row, sep=" | ")
-PY
+At the `psql` prompt, use `\dt` to list tables and `\q` to exit. To see the latest comments added through the API, run:
+
+```sql
+SELECT case_id, request_id, actor, message, created_at
+FROM action_requests
+ORDER BY created_at DESC
+LIMIT 5;
 ```
 
 ## Traditional apps and iPaaS

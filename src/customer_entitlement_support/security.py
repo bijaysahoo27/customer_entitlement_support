@@ -71,12 +71,12 @@ def authenticate(token: str | None) -> Principal:
 def quota_headers(db, principal: Principal, limit: int) -> dict[str, str]:
     now = int(time.time())
     start = now - now % 60
-    with db:
+    with db.transaction():
         row = db.execute("""
-            INSERT INTO api_quota VALUES (?, ?, 1)
+            INSERT INTO api_quota VALUES (%s, %s, 1)
             ON CONFLICT(principal) DO UPDATE SET window_start = excluded.window_start,
               used = CASE WHEN api_quota.window_start = excluded.window_start
-                THEN min(api_quota.used + 1, ?) ELSE 1 END
+                THEN least(api_quota.used + 1, %s) ELSE 1 END
             RETURNING used
         """, (principal.identifier, start, limit + 1)).fetchone()
     reset = start + 60 - now

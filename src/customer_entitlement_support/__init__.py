@@ -3,21 +3,23 @@ import json
 import os
 import re
 from collections.abc import Iterator
-from contextlib import asynccontextmanager, closing, suppress
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
+from functools import cache
 from hashlib import sha256
 from http import HTTPStatus
 from pathlib import Path
 from secrets import compare_digest, token_bytes, token_urlsafe
-from sqlite3 import Connection, OperationalError
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
+import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, Security, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from psycopg import Connection, OperationalError
 from pydantic import BaseModel, ConfigDict, StringConstraints
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -29,7 +31,7 @@ from .webhook import run_delivery
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.database = Path(os.getenv("SUPPORT_DATABASE", "support.sqlite3")).resolve()
+    app.state.database = os.environ["SUPPORT_DATABASE_URL"]
     initialize(app.state.database)
     app.state.local_token = None
     token_file = os.getenv("SUPPORT_LOCAL_TOKEN_FILE")
@@ -67,6 +69,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Customer Entitlement & Support Case API", version="1.0.0",
               lifespan=lifespan)
 bearer = HTTPBearer(auto_error=False)
+
+
+@cache
+def load_openapi_contract() -> dict:
+    package_dir = Path(__file__).resolve().parent
+    contract = package_dir / "openapi.yaml"
+    if not contract.is_file():
+        contract = package_dir.parents[1] / "openapi.yaml"
+    return yaml.safe_load(contract.read_text(encoding="utf-8"))
+
+
+app.openapi = load_openapi_contract
 
 
 def problem(request: Request, code: int, detail: str, headers=None, **extensions) -> JSONResponse:
@@ -114,7 +128,7 @@ async def data_problem(request: Request, exception: OperationalError):
 
 
 def database(request: Request) -> Iterator[Connection]:
-    with closing(connect(request.app.state.database)) as db:
+    with connect(request.app.state.database) as db:
         yield db
 
 
@@ -234,10 +248,10 @@ def list_customers(db: Database, actor: Consumer,
                    limit: Annotated[int, Query(ge=1, le=100)] = 50,
                    offset: Annotated[int, Query(ge=0)] = 0) -> list[Account]:
     actor.require("customers:read")
-    grants = json.dumps(sorted(actor.accounts))
+    grants = sorted(actor.accounts)
     return [account_view(row, actor) for row in db.execute(
-        """SELECT * FROM accounts WHERE customer_id IN (SELECT value FROM json_each(?))
-           ORDER BY customer_id LIMIT ? OFFSET ?""", (grants, limit, offset)
+        """SELECT * FROM accounts WHERE customer_id = ANY(%s)
+           ORDER BY customer_id LIMIT %s OFFSET %s""", (grants, limit, offset)
     )]
 
 
@@ -247,19 +261,19 @@ def customer_overview(id: str, db: Database, actor: Consumer, response: Response
     customer_id = canonical_account_id(id)
     if customer_id not in actor.accounts:
         raise HTTPException(404, "Customer not found")
-    with db:
-        db.execute("BEGIN")
-        account = db.execute("SELECT * FROM accounts WHERE customer_id = ?", (customer_id,)).fetchone()
+    with db.transaction():
+        db.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        account = db.execute("SELECT * FROM accounts WHERE customer_id = %s", (customer_id,)).fetchone()
         if account is None:
             raise HTTPException(404, "Customer not found")
         cases = [dict(row) for row in db.execute("""
-            SELECT * FROM cases WHERE customer_id = ? ORDER BY opened_at, case_id
+            SELECT * FROM cases WHERE customer_id = %s ORDER BY opened_at, case_id
         """, (customer_id,))]
         usage = db.execute("""
-            SELECT * FROM monthly_usage WHERE customer_id = ? ORDER BY month DESC LIMIT 1
+            SELECT * FROM monthly_usage WHERE customer_id = %s ORDER BY month DESC LIMIT 1
         """, (customer_id,)).fetchone()
         if usage is None:
-            usage = db.execute("SELECT * FROM usage WHERE customer_id = ?", (customer_id,)).fetchone()
+            usage = db.execute("SELECT * FROM usage WHERE customer_id = %s", (customer_id,)).fetchone()
     response.headers["Cache-Control"] = "private, no-store"
     return {"account": account_view(account, actor), "usage": dict(usage) if usage else None,
             "cases": cases}
@@ -288,12 +302,12 @@ def find_cases(
     column = {"opened_at": "c.opened_at", "priority": "c.priority", "renewal_date": "a.renewal_date"}[field]
     descending = sort.startswith("-")
     direction, comparison = ("DESC", "<") if descending else ("ASC", ">")
-    conditions = ["c.customer_id IN (SELECT value FROM json_each(?))"]
-    params = [json.dumps(grants)]
+    conditions = ["c.customer_id = ANY(%s)"]
+    params = [grants]
     for predicate, value in (
-        ("c.customer_id = ?", canonical_account_id(customer_id) if customer_id is not None else None),
-        ("a.support_tier = ?", support_tier),
-        ("c.priority = ?", priority),
+        ("c.customer_id = %s", canonical_account_id(customer_id) if customer_id is not None else None),
+        ("a.support_tier = %s", support_tier),
+        ("c.priority = %s", priority),
     ):
         if value is not None:
             conditions.append(predicate)
@@ -301,24 +315,24 @@ def find_cases(
     if open_only:
         conditions.append("c.status IN ('open', 'in_progress')")
     if older_than_hours is not None:
-        conditions.append("c.opened_at < ?")
+        conditions.append("c.opened_at < %s")
         params.append((now - timedelta(hours=older_than_hours)).isoformat())
     if renewal_within_days is not None:
-        conditions.append("a.renewal_date BETWEEN ? AND ?")
+        conditions.append("a.renewal_date BETWEEN %s AND %s")
         params.extend([now.date().isoformat(),
                        (now.date() + timedelta(days=renewal_within_days)).isoformat()])
     if anchor:
         _, value, case_id = anchor
-        conditions.append(f"({column} {comparison} ? OR ({column} = ? AND c.case_id > ?))")
+        conditions.append(f"({column} {comparison} %s OR ({column} = %s AND c.case_id > %s))")
         params.extend([value, value, case_id])
     where = " AND ".join(conditions)
-    with db:
-        db.execute("BEGIN")
+    with db.transaction():
+        db.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
         rows = [dict(row) for row in db.execute(f"""
             SELECT c.*, a.name AS customer_name, a.support_tier, a.renewal_date
             FROM cases c JOIN accounts a USING (customer_id)
             WHERE {where}
-            ORDER BY {column} {direction}, c.case_id ASC LIMIT ?
+            ORDER BY {column} {direction}, c.case_id ASC LIMIT %s
         """, [*params, limit + 1])]
         items = rows[:limit]
         for item in items:
@@ -332,7 +346,7 @@ def find_cases(
 
 
 def require_case(db: Connection, case_id: str, actor: Principal):
-    case = db.execute("SELECT * FROM cases WHERE case_id = ?", (case_id,)).fetchone()
+    case = db.execute("SELECT * FROM cases WHERE case_id = %s FOR UPDATE", (case_id,)).fetchone()
     if case is None or case["customer_id"] not in actor.accounts:
         raise HTTPException(404, "Case not found")
     return case
@@ -341,10 +355,10 @@ def require_case(db: Connection, case_id: str, actor: Principal):
 def case_etag(db: Connection, case) -> str:
     actions = db.execute("""
         SELECT case_id, request_id, kind, actor, message, created_at
-        FROM case_actions WHERE case_id = ?
+        FROM case_actions WHERE case_id = %s
         UNION ALL
         SELECT case_id, request_id, kind, actor, message, created_at
-        FROM action_requests WHERE case_id = ?
+        FROM action_requests WHERE case_id = %s
         ORDER BY created_at, request_id, actor, kind, message
     """, (case["case_id"], case["case_id"]))
     version = {**dict(case), "actions": [dict(row) for row in actions]}
@@ -355,20 +369,19 @@ def case_etag(db: Connection, case) -> str:
 def record_comment(db: Connection, case_id: str, payload: ActionRequest,
                    actor: Principal, if_match: str | None) -> dict:
     request_id = str(payload.request_id)
-    with db:
-        db.execute("BEGIN IMMEDIATE")
+    with db.transaction():
         case = require_case(db, case_id, actor)
         if if_match is not None and not re.fullmatch(r'"[!#-~]*"', if_match, flags=re.ASCII):
             raise HTTPException(400, "If-Match must contain one strong ETag")
         previous = db.execute("""
             SELECT case_id, request_id, kind, actor, message, created_at
-            FROM action_requests WHERE case_id = ? AND principal = ? AND request_id = ?
+            FROM action_requests WHERE case_id = %s AND principal = %s AND request_id = %s
         """, (case_id, actor.identifier, request_id)).fetchone()
         if previous:
             if (previous["kind"], previous["message"]) != ("comment", payload.message):
                 raise HTTPException(409, "Request ID already used for a different action")
             return dict(previous)
-        if db.execute("SELECT 1 FROM case_actions WHERE case_id = ? AND request_id = ?",
+        if db.execute("SELECT 1 FROM case_actions WHERE case_id = %s AND request_id = %s",
                       (case_id, request_id)).fetchone():
             raise HTTPException(409, "Request ID belongs to a legacy case action")
         if if_match is not None and if_match != case_etag(db, case):
@@ -380,12 +393,12 @@ def record_comment(db: Connection, case_id: str, payload: ActionRequest,
                   "message": payload.message, "created_at": now}
         db.execute("""
             INSERT INTO action_requests (case_id, principal, request_id, kind, actor, message, created_at)
-            VALUES (:case_id, :principal, :request_id, :kind,
-                :actor, :message, :created_at)
+            VALUES (%(case_id)s, %(principal)s, %(request_id)s, %(kind)s,
+                %(actor)s, %(message)s, %(created_at)s)
         """, {**action, "principal": actor.identifier})
         db.execute("""
             INSERT INTO audit_log (principal, case_id, action, outcome, request_id, created_at)
-            VALUES (?, ?, ?, 'committed', ?, ?)
+            VALUES (%s, %s, %s, 'committed', %s, %s)
         """, (actor.identifier, case_id, action["kind"], request_id, now))
         return action
 
